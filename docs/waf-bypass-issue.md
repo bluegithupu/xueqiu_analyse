@@ -163,5 +163,44 @@ for post in timeline_api():
 
 ---
 
+## 解决方案
+
+使用 **方案 E + playwright-stealth** 成功绕过 WAF：
+
+```python
+from playwright.sync_api import sync_playwright
+from playwright_stealth import Stealth
+
+BROWSER_DATA_DIR = "./browser_data"  # 持久化目录
+
+with Stealth().use_sync(sync_playwright()) as p:
+    context = p.chromium.launch_persistent_context(
+        user_data_dir=BROWSER_DATA_DIR,
+        headless=False,
+        args=["--disable-blink-features=AutomationControlled"],
+        ignore_default_args=["--enable-automation"],
+    )
+    page = context.pages[0]
+    
+    captured = []
+    def on_response(response):
+        if "original/timeline" in response.url and response.status == 200:
+            body = response.body().decode('utf-8')
+            if body.startswith('{'):
+                captured.append(json.loads(body))
+    
+    page.on("response", on_response)
+    page.goto(f"https://xueqiu.com/{user_id}/column")
+    # captured 中即是 API 返回的 JSON 数据
+```
+
+### 关键点
+
+1. **playwright-stealth**：隐藏自动化特征，绕过 WAF 检测
+2. **持久化上下文**：保存 WAF 验证状态，避免重复验证
+3. **监听网络请求**：捕获页面自动发起的带 `md5__1038` 签名的 API 请求
+
+---
+
 *文档创建: 2025-11-30*  
-*状态: 待解决*
+*状态: 已解决*

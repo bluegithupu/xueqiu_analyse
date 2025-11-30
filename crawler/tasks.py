@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from .browser import XueqiuBrowser
 from .client import CookiesExpiredError, XueqiuClient
 from .user_api import get_user_profile, iter_user_posts
 
@@ -158,3 +159,59 @@ def _save_state(user_dir: Path, state: dict):
 def _save_profile(user_dir: Path, profile: dict):
     profile_file = user_dir / "profile.json"
     profile_file.write_text(json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def crawl_user_column_browser(
+    nickname_or_id: str | int,
+    out_root: str = "./data",
+    on_progress: Callable[[int, dict], None] = None,
+) -> dict:
+    """使用浏览器抓取用户专栏（绕过 WAF）"""
+    out_root = Path(out_root)
+    stats = {"new_count": 0, "skip_count": 0, "error_count": 0}
+    
+    profile = get_user_profile(nickname_or_id)
+    user_id = str(profile["id"])
+    nickname = profile["nickname"]
+    
+    user_dir = out_root / _safe_filename(nickname)
+    posts_dir = user_dir / "posts"
+    posts_dir.mkdir(parents=True, exist_ok=True)
+    
+    state = _read_state(user_dir)
+    last_id = state.get("last_crawled_post_id")
+    _save_profile(user_dir, profile)
+    
+    with XueqiuBrowser(headless=False) as browser:
+        for post in browser.iter_column_posts(user_id):
+            post_id = post["id"]
+            
+            if last_id and int(post_id) <= int(last_id):
+                logger.info("到达已抓取位置，停止")
+                break
+            
+            try:
+                filename = _make_filename(post)
+                filepath = posts_dir / filename
+                
+                if filepath.exists():
+                    stats["skip_count"] += 1
+                    continue
+                
+                md_content = _render_markdown(post)
+                filepath.write_text(md_content, encoding="utf-8")
+                stats["new_count"] += 1
+                
+                if stats["new_count"] == 1:
+                    state["last_crawled_post_id"] = post_id
+                
+                if on_progress:
+                    on_progress(stats["new_count"], post)
+                    
+            except Exception as e:
+                logger.error(f"处理文章 {post_id} 失败: {e}")
+                stats["error_count"] += 1
+    
+    state["last_crawled_at"] = datetime.now().isoformat()
+    _save_state(user_dir, state)
+    return stats

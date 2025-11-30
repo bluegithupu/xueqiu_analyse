@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from crawler.client import CookiesExpiredError
 from crawler.user_api import UserNotFoundError
-from crawler.tasks import crawl_user_to_markdown
+from crawler.tasks import crawl_user_to_markdown, crawl_user_column_browser
 
 
 def main():
@@ -17,6 +17,7 @@ def main():
     parser.add_argument("user", help="用户 ID 或昵称")
     parser.add_argument("-o", "--output", default="./data", help="输出目录")
     parser.add_argument("-m", "--mode", choices=["column", "timeline"], help="抓取模式: column=专栏, timeline=全部")
+    parser.add_argument("-b", "--browser", action="store_true", help="使用浏览器模式（绕过 WAF）")
     parser.add_argument("-v", "--verbose", action="store_true", help="详细输出")
     args = parser.parse_args()
     
@@ -32,8 +33,13 @@ def main():
     
     try:
         mode_desc = args.mode or "配置默认"
-        print(f"开始抓取用户: {args.user} (模式: {mode_desc})")
-        stats = crawl_user_to_markdown(args.user, out_root=args.output, on_progress=on_progress, mode=args.mode)
+        if args.browser:
+            mode_desc = "浏览器专栏"
+            print(f"开始抓取用户: {args.user} (模式: {mode_desc})")
+            stats = crawl_user_column_browser(args.user, out_root=args.output, on_progress=on_progress)
+        else:
+            print(f"开始抓取用户: {args.user} (模式: {mode_desc})")
+            stats = crawl_user_to_markdown(args.user, out_root=args.output, on_progress=on_progress, mode=args.mode)
         print(f"\n完成! 新增: {stats['new_count']}, 跳过: {stats['skip_count']}, 错误: {stats['error_count']}")
     except FileNotFoundError as e:
         print(f"错误: {e}", file=sys.stderr)

@@ -6,7 +6,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from playwright.sync_api import sync_playwright, Page
+from playwright.sync_api import sync_playwright, Page, Response
+from playwright_stealth import Stealth
+
+
+# 浏览器数据目录（用于保存 WAF 验证状态）
+BROWSER_DATA_DIR = Path(__file__).parent.parent / "browser_data"
 
 
 class XueqiuBrowser:
@@ -17,19 +22,22 @@ class XueqiuBrowser:
     def __init__(self, headless: bool = True):
         self.headless = headless
         self._playwright = None
-        self._browser = None
         self._context = None
         self._page = None
     
     def __enter__(self):
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self.headless)
-        self._context = self._browser.new_context(
+        BROWSER_DATA_DIR.mkdir(exist_ok=True)
+        # 使用 stealth 模式 + 持久化上下文绕过 WAF
+        self._stealth_ctx = Stealth().use_sync(sync_playwright())
+        self._playwright = self._stealth_ctx.__enter__()
+        self._context = self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(BROWSER_DATA_DIR),
+            headless=self.headless,
+            args=["--disable-blink-features=AutomationControlled"],
+            ignore_default_args=["--enable-automation"],
             viewport={"width": 1280, "height": 800},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
         )
-        self._page = self._context.new_page()
-        # 注入 cookies
+        self._page = self._context.pages[0] if self._context.pages else self._context.new_page()
         self._load_cookies()
         return self
     
@@ -43,10 +51,10 @@ class XueqiuBrowser:
             self._context.add_cookies(cookies)
     
     def __exit__(self, *args):
-        if self._browser:
-            self._browser.close()
-        if self._playwright:
-            self._playwright.stop()
+        if self._context:
+            self._context.close()
+        if hasattr(self, '_stealth_ctx'):
+            self._stealth_ctx.__exit__(None, None, None)
     
     def get_user_profile(self, user_id: str) -> dict:
         """获取用户资料"""
@@ -78,38 +86,54 @@ class XueqiuBrowser:
         return profile
     
     def iter_column_posts(self, user_id: str, max_pages: int = None) -> Iterator[dict]:
-        """迭代用户专栏文章（通过 API）"""
-        # 先访问专栏页面获取 cookies
-        self._page.goto(f"{self.BASE_URL}/{user_id}/column", timeout=30000)
-        self._page.wait_for_load_state("domcontentloaded", timeout=15000)
-        time.sleep(2)
+        """迭代用户专栏文章（通过监听网络请求绕过 WAF）"""
+        captured_data = []
         
-        page = 1
-        while True:
-            if max_pages and page > max_pages:
-                break
+        def handle_response(response: Response):
+            if "original/timeline.json" in response.url and response.status == 200:
+                try:
+                    body = response.body()
+                    text = body.decode('utf-8', errors='ignore')
+                    if text.startswith('{'):
+                        data = json.loads(text)
+                        if data.get("list"):
+                            captured_data.append(data)
+                except Exception:
+                    pass
+        
+        self._page.on("response", handle_response)
+        
+        try:
+            self._page.goto(f"{self.BASE_URL}/{user_id}/column", timeout=30000)
+            self._page.wait_for_load_state("networkidle", timeout=15000)
+            time.sleep(2)
             
-            # 通过浏览器执行 API 请求
-            data = self._page.evaluate(f"""() => {{
-                return fetch('/statuses/original/timeline.json?user_id={user_id}&page={page}')
-                    .then(r => r.json())
-                    .catch(e => ({{ error: e.message }}));
-            }}""")
-            
-            if not data or "error" in data:
-                break
-            
-            posts = data.get("list", [])
-            if not posts:
-                break
-            
-            for item in posts:
-                yield self._parse_column_item(item, user_id)
-            
-            if len(posts) < 20:
-                break
-            page += 1
-            time.sleep(1)
+            page_num = 1
+            while True:
+                if max_pages and page_num > max_pages:
+                    break
+                
+                if not captured_data:
+                    time.sleep(2)
+                if not captured_data:
+                    break
+                
+                data = captured_data.pop(0)
+                posts = data.get("list", [])
+                if not posts:
+                    break
+                
+                for item in posts:
+                    yield self._parse_column_item(item, user_id)
+                
+                if len(posts) < 20:
+                    break
+                
+                page_num += 1
+                self._page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(2)
+        finally:
+            self._page.remove_listener("response", handle_response)
     
     def _parse_column_item(self, item: dict, user_id: str) -> dict:
         """解析专栏 API 返回的文章"""
