@@ -18,13 +18,29 @@ class XueqiuBrowser:
         self.headless = headless
         self._playwright = None
         self._browser = None
+        self._context = None
         self._page = None
     
     def __enter__(self):
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=self.headless)
-        self._page = self._browser.new_page()
+        self._context = self._browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        )
+        self._page = self._context.new_page()
+        # 注入 cookies
+        self._load_cookies()
         return self
+    
+    def _load_cookies(self):
+        """从配置加载 cookies"""
+        cookies_path = Path("config/cookies.json")
+        if cookies_path.exists():
+            data = json.loads(cookies_path.read_text(encoding="utf-8"))
+            data.pop("cookies_说明", None)
+            cookies = [{"name": k, "value": v, "domain": ".xueqiu.com", "path": "/"} for k, v in data.items()]
+            self._context.add_cookies(cookies)
     
     def __exit__(self, *args):
         if self._browser:
@@ -61,8 +77,65 @@ class XueqiuBrowser:
         profile["id"] = user_id
         return profile
     
+    def iter_column_posts(self, user_id: str, max_pages: int = None) -> Iterator[dict]:
+        """迭代用户专栏文章（通过 API）"""
+        # 先访问专栏页面获取 cookies
+        self._page.goto(f"{self.BASE_URL}/{user_id}/column", timeout=30000)
+        self._page.wait_for_load_state("domcontentloaded", timeout=15000)
+        time.sleep(2)
+        
+        page = 1
+        while True:
+            if max_pages and page > max_pages:
+                break
+            
+            # 通过浏览器执行 API 请求
+            data = self._page.evaluate(f"""() => {{
+                return fetch('/statuses/original/timeline.json?user_id={user_id}&page={page}')
+                    .then(r => r.json())
+                    .catch(e => ({{ error: e.message }}));
+            }}""")
+            
+            if not data or "error" in data:
+                break
+            
+            posts = data.get("list", [])
+            if not posts:
+                break
+            
+            for item in posts:
+                yield self._parse_column_item(item, user_id)
+            
+            if len(posts) < 20:
+                break
+            page += 1
+            time.sleep(1)
+    
+    def _parse_column_item(self, item: dict, user_id: str) -> dict:
+        """解析专栏 API 返回的文章"""
+        post_id = item.get("id")
+        created_at = item.get("created_at")
+        if isinstance(created_at, int):
+            created_at = datetime.fromtimestamp(created_at / 1000).isoformat()
+        
+        text = item.get("description", "")
+        # 清理 HTML
+        text = re.sub(r"<br\s*/?>", "\n", text)
+        text = re.sub(r"<[^>]+>", "", text)
+        
+        return {
+            "id": str(post_id),
+            "user_id": user_id,
+            "title": item.get("title", ""),
+            "content_text": text,
+            "created_at": created_at,
+            "url": f"https://xueqiu.com{item.get('target', '')}",
+            "type": "long_post",
+            "view_count": item.get("view_count", 0),
+        }
+    
     def iter_user_posts(self, user_id: str, max_pages: int = None) -> Iterator[dict]:
-        """迭代用户文章"""
+        """迭代用户文章（滚动加载）"""
         self._page.goto(f"{self.BASE_URL}/u/{user_id}")
         self._page.wait_for_load_state("networkidle")
         self._close_popups()

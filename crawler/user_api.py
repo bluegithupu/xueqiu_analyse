@@ -43,11 +43,18 @@ def _search_user_by_nick(client, nick):
     raise UserNotFoundError(f"找不到昵称为 '{nick}' 的用户")
 
 
-def iter_user_posts(user_id, max_pages=None):
-    """迭代用户文章列表"""
+def iter_user_posts(user_id, max_pages=None, mode="column"):
+    """迭代用户文章列表
+    
+    Args:
+        user_id: 用户 ID
+        max_pages: 最大页数限制
+        mode: 抓取模式，column=仅专栏长文，timeline=全部动态
+    """
     client = XueqiuClient()
     page_size = client.settings.get("crawl", {}).get("page_size", 20)
     page = 1
+    filter_long_only = (mode == "column")
     
     while True:
         if max_pages and page > max_pages:
@@ -63,6 +70,9 @@ def iter_user_posts(user_id, max_pages=None):
         for status in statuses:
             post = _parse_post(status)
             if post:
+                # column 模式只返回长文
+                if filter_long_only and post["type"] != "long_post":
+                    continue
                 yield post
         
         if len(statuses) < page_size:
@@ -71,12 +81,15 @@ def iter_user_posts(user_id, max_pages=None):
 
 
 def _parse_post(status):
-    """解析文章数据"""
+    """解析文章数据（兼容 timeline 和 column API）"""
     if not status:
         return None
     
     post_id = status.get("id")
+    # timeline API 嵌套 user 对象，column API 直接提供 user_id
     user = status.get("user", {})
+    user_id = user.get("id") or status.get("user_id")
+    nickname = user.get("screen_name", "")
     
     created_at = status.get("created_at")
     if isinstance(created_at, int):
@@ -85,21 +98,22 @@ def _parse_post(status):
     text = status.get("text", "") or status.get("description", "")
     content_text = _clean_html(text)
     title = status.get("title", "")
-    is_long = status.get("mark") == 1 or bool(title)
+    is_long = status.get("mark", 0) >= 1 or bool(title)
     symbols = _extract_symbols(text)
     
     return {
         "id": post_id,
-        "user_id": user.get("id"),
-        "nickname": user.get("screen_name", ""),
+        "user_id": user_id,
+        "nickname": nickname,
         "title": title,
         "content_text": content_text,
         "created_at": created_at,
-        "url": f"https://xueqiu.com/{user.get('id')}/{post_id}",
+        "url": f"https://xueqiu.com/{user_id}/{post_id}",
         "type": "long_post" if is_long else "short_status",
         "like_count": status.get("like_count", 0),
         "comment_count": status.get("reply_count", 0),
         "repost_count": status.get("retweet_count", 0),
+        "view_count": status.get("view_count", 0),
         "symbols": symbols,
     }
 

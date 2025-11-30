@@ -16,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description="抓取雪球用户文章到 Markdown")
     parser.add_argument("user", help="用户 ID 或昵称")
     parser.add_argument("-o", "--output", default="./data", help="输出目录")
+    parser.add_argument("-m", "--mode", choices=["column", "timeline"], help="抓取模式: column=专栏, timeline=全部")
     parser.add_argument("-v", "--verbose", action="store_true", help="详细输出")
     args = parser.parse_args()
     
@@ -30,8 +31,9 @@ def main():
         print(f"[{count}] {title}")
     
     try:
-        print(f"开始抓取用户: {args.user}")
-        stats = crawl_user_to_markdown(args.user, out_root=args.output, on_progress=on_progress)
+        mode_desc = args.mode or "配置默认"
+        print(f"开始抓取用户: {args.user} (模式: {mode_desc})")
+        stats = crawl_user_to_markdown(args.user, out_root=args.output, on_progress=on_progress, mode=args.mode)
         print(f"\n完成! 新增: {stats['new_count']}, 跳过: {stats['skip_count']}, 错误: {stats['error_count']}")
     except FileNotFoundError as e:
         print(f"错误: {e}", file=sys.stderr)

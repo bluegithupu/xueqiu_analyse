@@ -18,6 +18,7 @@ retry:
 # 抓取设置
 crawl:
   page_size: 20
+  mode: column  # column: 仅专栏文章, timeline: 全部动态
 
 # OpenAI 配置
 openai:

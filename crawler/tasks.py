@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from .client import CookiesExpiredError
+from .client import CookiesExpiredError, XueqiuClient
 from .user_api import get_user_profile, iter_user_posts
 
 logger = logging.getLogger(__name__)
@@ -16,8 +16,13 @@ def crawl_user_to_markdown(
     nickname_or_id: str | int,
     out_root: str = "./data",
     on_progress: Callable[[int, dict], None] = None,
+    mode: str = None,
 ) -> dict:
-    """将用户全部文章保存为 Markdown"""
+    """将用户文章保存为 Markdown
+    
+    Args:
+        mode: 抓取模式，None=从配置读取，column=专栏，timeline=全部
+    """
     out_root = Path(out_root)
     stats = {"new_count": 0, "skip_count": 0, "error_count": 0}
     
@@ -33,8 +38,12 @@ def crawl_user_to_markdown(
     last_id = state.get("last_crawled_post_id")
     _save_profile(user_dir, profile)
     
+    if mode is None:
+        client = XueqiuClient()
+        mode = client.settings.get("crawl", {}).get("mode", "column")
+    
     try:
-        for post in iter_user_posts(user_id):
+        for post in iter_user_posts(user_id, mode=mode):
             post_id = post["id"]
             
             if last_id and post_id <= last_id:
