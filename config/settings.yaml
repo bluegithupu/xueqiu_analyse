@@ -1,0 +1,20 @@
+# 雪球爬虫配置
+
+# HTTP 客户端设置
+http:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  timeout: 30
+
+# 限速设置
+rate_limit:
+  min_interval: 1.0
+  max_interval: 2.0
+
+# 重试设置
+retry:
+  max_attempts: 3
+  base_delay: 1.0
+
+# 抓取设置
+crawl:
+  page_size: 20
