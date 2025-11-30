@@ -17,15 +17,13 @@ def get_user_profile(user_id_or_nick):
     
     if isinstance(user_id_or_nick, int) or str(user_id_or_nick).isdigit():
         user_id = str(user_id_or_nick)
+        data = client.get_json(f"/v4/user/profile/{user_id}")
+        if not data or "error_description" in data:
+            raise UserNotFoundError(f"用户不存在: {user_id_or_nick}")
+        user = data.get("user", data)
     else:
-        user_id = _search_user_by_nick(client, user_id_or_nick)
+        user = _search_user_by_nick(client, user_id_or_nick)
     
-    data = client.get_json(f"/v4/user/profile/{user_id}")
-    
-    if not data or "error_description" in data:
-        raise UserNotFoundError(f"用户不存在: {user_id_or_nick}")
-    
-    user = data.get("user", data)
     return {
         "id": user.get("id"),
         "nickname": user.get("screen_name", ""),
@@ -36,12 +34,12 @@ def get_user_profile(user_id_or_nick):
 
 
 def _search_user_by_nick(client, nick):
-    """通过昵称搜索用户 ID"""
+    """通过昵称搜索用户，返回完整用户信息"""
     data = client.get_json("/query/v1/search/user.json", {"q": nick, "page": 1, "size": 10})
     users = data.get("list", [])
     for user in users:
         if user.get("screen_name") == nick:
-            return str(user.get("id"))
+            return user
     raise UserNotFoundError(f"找不到昵称为 '{nick}' 的用户")
 
 
@@ -50,15 +48,12 @@ def iter_user_posts(user_id, max_pages=None):
     client = XueqiuClient()
     page_size = client.settings.get("crawl", {}).get("page_size", 20)
     page = 1
-    max_id = -1
     
     while True:
         if max_pages and page > max_pages:
             break
         
         params = {"user_id": user_id, "page": page, "count": page_size}
-        if max_id > 0:
-            params["max_id"] = max_id
         data = client.get_json("/statuses/user_timeline.json", params)
         statuses = data.get("statuses", [])
         
@@ -69,7 +64,6 @@ def iter_user_posts(user_id, max_pages=None):
             post = _parse_post(status)
             if post:
                 yield post
-                max_id = post["id"]
         
         if len(statuses) < page_size:
             break
