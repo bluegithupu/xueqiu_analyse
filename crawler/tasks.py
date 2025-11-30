@@ -8,6 +8,7 @@ from typing import Callable
 
 from .browser import XueqiuBrowser
 from .client import CookiesExpiredError, XueqiuClient
+from .nodriver_browser import get_posts_full_content as nodriver_batch_get
 from .user_api import get_user_profile, iter_user_posts
 
 logger = logging.getLogger(__name__)
@@ -183,6 +184,8 @@ def crawl_user_column_browser(
     _save_profile(user_dir, profile)
     
     with XueqiuBrowser(headless=False) as browser:
+        # 先收集文章列表（会访问专栏页面）
+        posts_to_fetch = []
         for post in browser.iter_column_posts(user_id):
             post_id = post["id"]
             
@@ -190,13 +193,26 @@ def crawl_user_column_browser(
                 logger.info("到达已抓取位置，停止")
                 break
             
+            filename = _make_filename(post)
+            filepath = posts_dir / filename
+            
+            if filepath.exists():
+                stats["skip_count"] += 1
+                continue
+            
+            posts_to_fetch.append((post, filepath))
+        
+    # 使用 nodriver 批量获取全文（绕过 WAF 滑动验证）
+    if posts_to_fetch:
+        post_ids = [post["id"] for post, _ in posts_to_fetch]
+        logger.info(f"使用 nodriver 获取 {len(post_ids)} 篇文章全文...")
+        full_contents = nodriver_batch_get(user_id, post_ids)
+        
+        for post, filepath in posts_to_fetch:
+            post_id = post["id"]
             try:
-                filename = _make_filename(post)
-                filepath = posts_dir / filename
-                
-                if filepath.exists():
-                    stats["skip_count"] += 1
-                    continue
+                if post_id in full_contents:
+                    post["content_text"] = full_contents[post_id]
                 
                 md_content = _render_markdown(post)
                 filepath.write_text(md_content, encoding="utf-8")

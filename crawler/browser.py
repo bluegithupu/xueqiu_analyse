@@ -143,9 +143,7 @@ class XueqiuBrowser:
             created_at = datetime.fromtimestamp(created_at / 1000).isoformat()
         
         text = item.get("description", "")
-        # 清理 HTML
-        text = re.sub(r"<br\s*/?>", "\n", text)
-        text = re.sub(r"<[^>]+>", "", text)
+        text = self._clean_html(text)
         
         return {
             "id": str(post_id),
@@ -157,6 +155,77 @@ class XueqiuBrowser:
             "type": "long_post",
             "view_count": item.get("view_count", 0),
         }
+    
+    def get_post_full_content(self, user_id: str, post_id: str) -> str:
+        """获取文章全文（从专栏页面点击进入详情）"""
+        full_text = []
+        
+        def handle_response(response: Response):
+            url = response.url
+            # 监听文章详情相关 API
+            if response.status == 200 and ("expand" in url or "show.json" in url):
+                try:
+                    body = response.body()
+                    text = body.decode('utf-8', errors='ignore')
+                    if text.startswith('{'):
+                        data = json.loads(text)
+                        status = data.get("status", {})
+                        content = status.get("text") or status.get("description", "")
+                        if content and len(content) > 200:
+                            full_text.append(content)
+                except Exception:
+                    pass
+        
+        self._page.on("response", handle_response)
+        
+        try:
+            # 点击文章链接
+            link = self._page.locator(f'a[href*="/{post_id}"]').first
+            if link.is_visible(timeout=3000):
+                link.click()
+                
+                # 等待页面加载，如果遇到 WAF 验证需要更多时间
+                self._page.wait_for_load_state("networkidle", timeout=20000)
+                
+                # 检查是否需要滑动验证
+                if "滑动验证" in self._page.content():
+                    print("  [!] 检测到滑动验证，请手动完成...")
+                    # 等待用户完成验证
+                    self._page.wait_for_selector("article, .article__bd", timeout=60000)
+                
+                time.sleep(2)
+                
+                # 如果没捕获到 API 响应，尝试从 DOM 提取
+                if not full_text:
+                    content = self._page.evaluate("""() => {
+                        const el = document.querySelector('.article__bd__detail') ||
+                                   document.querySelector('.article__bd') ||
+                                   document.querySelector('article');
+                        return el ? el.innerText : '';
+                    }""")
+                    if content and len(content) > 200:
+                        full_text.append(content)
+                
+                # 返回专栏页面
+                self._page.go_back()
+                self._page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception as e:
+            print(f"  [!] 获取全文失败: {e}")
+        finally:
+            self._page.remove_listener("response", handle_response)
+        
+        return self._clean_html(full_text[0]) if full_text else ""
+    
+    def _clean_html(self, html: str) -> str:
+        """清理 HTML 标签"""
+        if not html:
+            return ""
+        text = re.sub(r"<br\s*/?>", "\n", html)
+        text = re.sub(r"</p>", "\n\n", text)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = text.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">")
+        text = text.replace("&amp;", "&").replace("&quot;", '"')
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
     
     def iter_user_posts(self, user_id: str, max_pages: int = None) -> Iterator[dict]:
         """迭代用户文章（滚动加载）"""

@@ -56,14 +56,17 @@ python scripts/analyse_user.py <用户名>
 
 ### WAF 绕过
 
-雪球专栏 API `/statuses/original/timeline.json` 受阿里云 WAF 保护，直接 HTTP 请求会被拦截。
+雪球受阿里云 WAF 保护，使用混合方案绕过：
 
-解决方案：
-1. **playwright-stealth**：隐藏浏览器自动化特征
-2. **持久化上下文**：保存 WAF 验证状态到 `browser_data/`
-3. **网络监听**：捕获页面自动发起的带签名的 API 请求
+| 功能 | 工具 | 说明 |
+|------|------|------|
+| 专栏列表 | playwright-stealth | JS 签名验证 |
+| **文章全文** | **nodriver** | 滑动验证（更严格）|
 
-详见 [docs/waf-bypass-issue.md](docs/waf-bypass-issue.md)
+- **nodriver**：undetected-chromedriver 继任者，直接 CDP 通信
+- 无需手动验证，自动绕过 WAF
+
+详见 [docs/waf-bypass-issue.md](docs/waf-bypass-issue.md) / [docs/full-content-issue.md](docs/full-content-issue.md)
 
 ### 数据流
 
